@@ -1,0 +1,72 @@
+name: Build iOS IPA (без подписи)
+
+# Запускается вручную: вкладка Actions → «Build iOS IPA (без подписи)» → Run workflow.
+# На выходе файл Planner.ipa без подписи. Подписывает его на твоём компьютере Sideloadly (бесплатным Apple ID).
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      CI: '1'
+      EXPO_NO_TELEMETRY: '1'
+
+    steps:
+      - name: Забрать код
+        uses: actions/checkout@v4
+
+      - name: Установить Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Выбрать свежую версию Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Установить зависимости
+        run: npm ci
+
+      - name: Сгенерировать нативный iOS-проект
+        run: npx expo prebuild --platform ios
+
+      - name: Собрать приложение без подписи
+        working-directory: ios
+        run: |
+          set -eo pipefail
+          WORKSPACE=$(ls -d *.xcworkspace | head -n 1)
+          SCHEME="${WORKSPACE%.xcworkspace}"
+          echo "Workspace: $WORKSPACE, scheme: $SCHEME"
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Упаковать в .ipa
+        working-directory: ios
+        run: |
+          set -eo pipefail
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -n 1)
+          echo "Найдено приложение: $APP"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry ../Planner.ipa Payload
+          ls -lh ../Planner.ipa
+
+      - name: Сохранить результат
+        uses: actions/upload-artifact@v4
+        with:
+          name: planner-ipa
+          path: Planner.ipa
+          retention-days: 14
